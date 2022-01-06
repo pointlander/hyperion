@@ -5,6 +5,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -14,6 +15,7 @@ import (
 	"math/cmplx"
 	"math/rand"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,7 +37,12 @@ const (
 	scale     = 1
 )
 
-func main() {
+var (
+	// NeuralCompressMode use neural compress mode
+	NeuralCompressMode = flag.Bool("neural", false, "neural compress mode")
+)
+
+func neuralCompress() {
 	rand.Seed(7)
 
 	file, err := os.Open(testImage)
@@ -253,4 +260,181 @@ func main() {
 	file.Close()
 
 	fmt.Println((hiddens*netWidth + netWidth + size*hiddens) * 16)
+}
+
+func main() {
+	flag.Parse()
+
+	if *NeuralCompressMode {
+		neuralCompress()
+		return
+	}
+
+	rand.Seed(7)
+
+	file, err := os.Open(testImage)
+	if err != nil {
+		panic(err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		panic(err)
+	}
+	name := info.Name()
+	name = name[:strings.Index(name, ".")]
+
+	input, _, err := image.Decode(file)
+	if err != nil {
+		panic(err)
+	}
+	file.Close()
+
+	width, height := input.Bounds().Max.X, input.Bounds().Max.Y
+	width, height = width/scale, height/scale
+	input = resize.Resize(uint(width), uint(height), input, resize.NearestNeighbor)
+	width -= width % 1024
+	height -= height % 1024
+	bounds := image.Rect(0, 0, width, height)
+	g := gift.New(
+		gift.Crop(bounds),
+	)
+	cropped := image.NewRGBA64(bounds)
+	g.Draw(cropped, input)
+	input = cropped
+
+	fmt.Println(math.Log2(float64(width)), width, math.Log2(float64(height)), height, math.Pow(2, 10))
+	size := int(math.Log2(float64(width)))
+	fmt.Println(float64(4*size) / (1024.0 * 1024.0))
+
+	type Genome struct {
+		Genome  []float32
+		Fitness float32
+	}
+	genome := make([]Genome, 128)
+	for i := range genome {
+		g := Genome{
+			Genome:  make([]float32, 4*size),
+			Fitness: 0,
+		}
+		for j := range g.Genome {
+			g.Genome[j] = float32(rand.NormFloat64())
+		}
+		genome[i] = g
+	}
+
+	multiply := func(a []float32, b []float32) []float32 {
+		sizeA, sizeB := int(math.Sqrt(float64(len(a)))), int(math.Sqrt(float64(len(b))))
+		output := make([]float32, 0, len(a)*len(b))
+		for x := 0; x < sizeA; x++ {
+			for y := 0; y < sizeB; y++ {
+				for i := 0; i < sizeA; i++ {
+					for j := 0; j < sizeB; j++ {
+						output = append(output, a[x*sizeA+i]*b[y*sizeB+j])
+					}
+				}
+			}
+		}
+		return output
+	}
+	chain := func(genome []float32) []float32 {
+		value := multiply(genome[0:4], genome[4:8])
+		for i := 8; i < size*4; i += 4 {
+			value = multiply(genome[i:i+4], value)
+		}
+		return value
+	}
+	i := 0
+	for {
+		done := make(chan bool, 8)
+		fitness := func(g *Genome) {
+			img := chain(g.Genome)
+			sum := float32(0.0)
+			for y := 0; y < 1024; y++ {
+				for x := 0; x < 1024; x++ {
+					colors := input.At(x, y)
+					r, g, b, _ := colors.RGBA()
+					gray := (float32(r)/0xFFFF + float32(g)/0xFFFF + float32(b)/0xFFFF) / 3
+					difference := img[y*1024+x] - float32(gray)
+					sum += float32(math.Sqrt(float64(difference * difference)))
+				}
+			}
+			g.Fitness = sum
+			done <- true
+		}
+		for j := range genome {
+			go fitness(&genome[j])
+		}
+		for range genome {
+			<-done
+		}
+
+		sort.Slice(genome, func(i, j int) bool {
+			return genome[i].Fitness < genome[j].Fitness
+		})
+		fmt.Println(i)
+		if i >= 256 {
+			break
+		}
+
+		for i, g := range genome[:10] {
+			fmt.Println(i, g.Fitness/(1024*1024))
+		}
+		genome = genome[:32]
+		for i := range genome {
+			// swap
+			x, y := rand.Intn(10), rand.Intn(10)
+			cpx := make([]float32, len(genome[x].Genome))
+			copy(cpx, genome[x].Genome)
+			gx := Genome{
+				Genome:  cpx,
+				Fitness: 0,
+			}
+
+			cpy := make([]float32, len(genome[y].Genome))
+			copy(cpy, genome[y].Genome)
+			gy := Genome{
+				Genome:  cpy,
+				Fitness: 0,
+			}
+
+			a, b := rand.Intn(len(cpx)), rand.Intn(len(cpy))
+			cpy[a], cpx[b] = cpx[b], cpy[a]
+			genome = append(genome, gx)
+			genome = append(genome, gy)
+
+			// mutate
+			cp := make([]float32, len(genome[i].Genome))
+			copy(cp, genome[i].Genome)
+			g := Genome{
+				Genome:  cp,
+				Fitness: 0,
+			}
+			cp[rand.Intn(len(cp))] += float32(rand.NormFloat64())
+			genome = append(genome, g)
+		}
+		i++
+	}
+
+	img := chain(genome[0].Genome)
+	coded := image.NewGray(input.Bounds())
+	for j := 0; j < height; j++ {
+		for i := 0; i < width; i++ {
+			pix := color.Gray{
+				Y: uint8(img[j*height+i]*0xFF + .5),
+			}
+			coded.SetGray(i, j, pix)
+		}
+	}
+
+	file, err = os.Create("image_coded.png")
+	if err != nil {
+		panic(err)
+	}
+
+	err = png.Encode(file, coded)
+	if err != nil {
+		panic(err)
+	}
+	file.Close()
 }
