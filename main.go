@@ -40,6 +40,8 @@ const (
 var (
 	// NeuralCompressMode use neural compress mode
 	NeuralCompressMode = flag.Bool("neural", false, "neural compress mode")
+	// KroneckerCompressMode use kronecker compress mode
+	KroneckerCompressMode = flag.Bool("kronecker", false, "kronecker compress mode")
 )
 
 func neuralCompress() {
@@ -262,14 +264,7 @@ func neuralCompress() {
 	fmt.Println((hiddens*netWidth + netWidth + size*hiddens) * 16)
 }
 
-func main() {
-	flag.Parse()
-
-	if *NeuralCompressMode {
-		neuralCompress()
-		return
-	}
-
+func kroneckerCompress() {
 	rand.Seed(7)
 
 	file, err := os.Open(testImage)
@@ -437,4 +432,16 @@ func main() {
 		panic(err)
 	}
 	file.Close()
+}
+
+func main() {
+	flag.Parse()
+
+	if *NeuralCompressMode {
+		neuralCompress()
+		return
+	} else if *KroneckerCompressMode {
+		kroneckerCompress()
+		return
+	}
 }
