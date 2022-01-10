@@ -303,17 +303,27 @@ func kroneckerCompress() {
 	fmt.Println(float64(4*size) / (1024.0 * 1024.0))
 
 	type Genome struct {
-		Genome  []float32
+		Red     []float32
+		Green   []float32
+		Blue    []float32
 		Fitness float32
 	}
 	genome := make([]Genome, 128)
 	for i := range genome {
 		g := Genome{
-			Genome:  make([]float32, 4*size),
+			Red:     make([]float32, 4*size),
+			Green:   make([]float32, 4*size),
+			Blue:    make([]float32, 4*size),
 			Fitness: 0,
 		}
-		for j := range g.Genome {
-			g.Genome[j] = float32(rand.NormFloat64())
+		for j := range g.Red {
+			g.Red[j] = float32(rand.NormFloat64())
+		}
+		for j := range g.Green {
+			g.Green[j] = float32(rand.NormFloat64())
+		}
+		for j := range g.Blue {
+			g.Blue[j] = float32(rand.NormFloat64())
 		}
 		genome[i] = g
 	}
@@ -343,14 +353,17 @@ func kroneckerCompress() {
 	for {
 		done := make(chan bool, 8)
 		fitness := func(g *Genome) {
-			img := chain(g.Genome)
+			red, green, blue := chain(g.Red), chain(g.Green), chain(g.Blue)
 			sum := float32(0.0)
 			for y := 0; y < 1024; y++ {
 				for x := 0; x < 1024; x++ {
 					colors := input.At(x, y)
 					r, g, b, _ := colors.RGBA()
-					gray := (float32(r)/0xFFFF + float32(g)/0xFFFF + float32(b)/0xFFFF) / 3
-					difference := img[y*1024+x] - float32(gray)
+					difference := float32(red[y*1024+x]) - float32(r/0xFFFF)
+					sum += float32(math.Sqrt(float64(difference * difference)))
+					difference = float32(green[y*1024+x]) - float32(g/0xFFFF)
+					sum += float32(math.Sqrt(float64(difference * difference)))
+					difference = float32(blue[y*1024+x]) - float32(b/0xFFFF)
 					sum += float32(math.Sqrt(float64(difference * difference)))
 				}
 			}
@@ -379,46 +392,73 @@ func kroneckerCompress() {
 		for i := range genome {
 			// swap
 			x, y := rand.Intn(10), rand.Intn(10)
-			cpx := make([]float32, len(genome[x].Genome))
-			copy(cpx, genome[x].Genome)
+			cpxr := make([]float32, len(genome[x].Red))
+			cpxg := make([]float32, len(genome[x].Green))
+			cpxb := make([]float32, len(genome[x].Blue))
+			copy(cpxr, genome[x].Red)
+			copy(cpxg, genome[x].Green)
+			copy(cpxb, genome[x].Blue)
 			gx := Genome{
-				Genome:  cpx,
+				Red:     cpxr,
+				Green:   cpxg,
+				Blue:    cpxb,
 				Fitness: 0,
 			}
 
-			cpy := make([]float32, len(genome[y].Genome))
-			copy(cpy, genome[y].Genome)
+			cpyr := make([]float32, len(genome[y].Red))
+			cpyg := make([]float32, len(genome[y].Green))
+			cpyb := make([]float32, len(genome[y].Blue))
+			copy(cpyr, genome[y].Red)
+			copy(cpyg, genome[y].Green)
+			copy(cpyb, genome[y].Blue)
 			gy := Genome{
-				Genome:  cpy,
+				Red:     cpyr,
+				Green:   cpyg,
+				Blue:    cpyb,
 				Fitness: 0,
 			}
 
-			a, b := rand.Intn(len(cpx)), rand.Intn(len(cpy))
-			cpy[a], cpx[b] = cpx[b], cpy[a]
+			a, b := rand.Intn(len(cpxr)), rand.Intn(len(cpyr))
+			cpyr[a], cpxr[b] = cpxr[b], cpyr[a]
+			cpyg[a], cpxg[b] = cpxg[b], cpyg[a]
+			cpyb[a], cpxb[b] = cpxb[b], cpyb[a]
 			genome = append(genome, gx)
 			genome = append(genome, gy)
 
 			// mutate
-			cp := make([]float32, len(genome[i].Genome))
-			copy(cp, genome[i].Genome)
+			cpr := make([]float32, len(genome[i].Red))
+			cpg := make([]float32, len(genome[i].Green))
+			cpb := make([]float32, len(genome[i].Blue))
+			copy(cpr, genome[i].Red)
+			copy(cpg, genome[i].Green)
+			copy(cpb, genome[i].Blue)
 			g := Genome{
-				Genome:  cp,
+				Red:     cpr,
+				Green:   cpg,
+				Blue:    cpb,
 				Fitness: 0,
 			}
-			cp[rand.Intn(len(cp))] += float32(rand.NormFloat64())
+			cpr[rand.Intn(len(cpr))] += float32(rand.NormFloat64())
+			cpg[rand.Intn(len(cpg))] += float32(rand.NormFloat64())
+			cpb[rand.Intn(len(cpb))] += float32(rand.NormFloat64())
 			genome = append(genome, g)
 		}
 		i++
 	}
 
-	img := chain(genome[0].Genome)
-	coded := image.NewGray(input.Bounds())
+	red := chain(genome[0].Red)
+	green := chain(genome[0].Green)
+	blue := chain(genome[0].Blue)
+	coded := image.NewRGBA64(input.Bounds())
 	for j := 0; j < height; j++ {
 		for i := 0; i < width; i++ {
-			pix := color.Gray{
-				Y: uint8(img[j*height+i]*0xFF + .5),
+			pix := color.RGBA64{
+				R: uint16(red[j*height+i]*0xFFFF + .5),
+				G: uint16(green[j*height+i]*0xFFFF + .5),
+				B: uint16(blue[j*height+i]*0xFFFF + .5),
+				A: 0xFFFF,
 			}
-			coded.SetGray(i, j, pix)
+			coded.SetRGBA64(i, j, pix)
 		}
 	}
 
